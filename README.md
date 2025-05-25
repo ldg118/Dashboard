@@ -1,5 +1,6 @@
 使用方法说明
 请在 Cloudflare dashboard 预设两个 KV 命名空间
+
 一个绑定为 USERS 用于存储用户信息
 一个绑定为 PASSWORDS 用于存储每个用户的密码记录集
 
