@@ -1,0 +1,342 @@
+async function sha256(text) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(text);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function genToken(len=32) {
+    const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+    let t = '';
+    const rand = new Uint32Array(len);
+    crypto.getRandomValues(rand);
+    for(let i=0;i<len;i++) t += chars[rand[i]%chars.length];
+    return t;
+}
+const CHAR_SETS = {
+    upper: "ABCDEFGHJKMNPQRSTUVWXYZ",
+    lower: "abcdefghjkmnpqrstuvwxyz",
+    digit: "23456789",
+    special: "!@#$%^&*"
+};
+function getCharset(opts) {
+    let cs = "";
+    if (opts.upper) cs += CHAR_SETS.upper;
+    if (opts.lower) cs += CHAR_SETS.lower;
+    if (opts.digit) cs += CHAR_SETS.digit;
+    if (opts.special) cs += CHAR_SETS.special;
+    return cs;
+}
+function generatePassword(length, opts = {upper: true, lower:true, digit:true, special:true}) {
+    const charset = getCharset(opts);
+    if (!charset) throw new Error("No charset selected!");
+    let pw = "";
+    const randoms = new Uint32Array(length);
+    crypto.getRandomValues(randoms);
+    for (let i = 0; i < length; i++)
+        pw += charset[randoms[i] % charset.length];
+    return pw;
+}
+const HTML = `
+<html><head><meta charset="utf-8"><title>用户密码管理</title>
+<style>
+body{font-family:sans-serif;max-width:430px;margin:auto}
+.box{border:1px solid #aaa;border-radius:8px;padding:20px;margin:20px 0}
+input[type=text],input[type=password],input[type=number]{width:90%;padding:6px;margin:4px 0}
+button{margin:4px;}
+.pwrow{margin-bottom:8px;}
+</style>
+</head>
+<body>
+<h2>注册 / 登录</h2>
+<div class="box">
+    <div id="loginbox">
+        <input id="luser" type="text" placeholder="用户名"><br>
+        <input id="lpass" type="password" placeholder="密码"><br>
+        <button onclick="register()">注册</button>
+        <button onclick="login()">登录</button>
+        <div id="lmsg" style="color:#c00"></div>
+    </div>
+</div>
+<div id="mainarea" style="display:none" class="box">
+    <div>欢迎 <span id="uname"></span> <button onclick="logout()" style="float:right">退出</button></div>
+    <hr>
+    <b>生成密码</b><br>
+    长度: <input type="number" id="pwlen" value="16" min="4" max="64" style="width:40px;">
+    <label><input type="checkbox" id="up" checked>大写</label>
+    <label><input type="checkbox" id="low" checked>小写</label>
+    <label><input type="checkbox" id="dig" checked>数字</label>
+    <label><input type="checkbox" id="sp" checked>特殊</label><br>
+    <button onclick="genpw()">生成密码</button> <input id="pwout" style="width:65%">
+    <hr>
+    <b>保存密码</b><br>
+    名称: <input id="savename" style="width:60%">
+    <button onclick="savepw()">保存</button>
+    <div id="savemsg"></div>
+    <hr>
+    <b>保存记录</b> <button onclick="listPws()">刷新</button>
+    <button onclick="exportAll()">导出CSV</button>
+    <ul id="pwlist" style="padding-left:0"></ul>
+</div>
+<script>
+let token = '';
+let editName = null;
+function show(id) {
+    document.getElementById('loginbox').style.display = id==='login'?'':'none';
+    document.getElementById('mainarea').style.display = id==='main'?'':'none';
+}
+function register() {
+    let u = luser.value.trim(), p = lpass.value;
+    lmsg.textContent = '';
+    if (!u||!p) return lmsg.textContent='请输入用户名和密码';
+    fetch('/register', {
+        method: 'POST',
+        body: JSON.stringify({username:u, password:p}),
+        headers: {'content-type':'application/json'}
+    }).then(r=>r.json()).then(d=>{
+        if(d.ok){lmsg.textContent="注册成功，请登录";} else lmsg.textContent=d.error||"错误";
+    });
+}
+function login() {
+    let u = luser.value.trim(), p = lpass.value;
+    lmsg.textContent = '';
+    if (!u||!p) return lmsg.textContent='请输入用户名和密码';
+    fetch('/login', {
+        method: 'POST',
+        body: JSON.stringify({username:u, password:p}),
+        headers: {'content-type':'application/json'}
+    }).then(r=>r.json()).then(d=>{
+        if(d.ok){
+            token = d.token;
+            localStorage.setItem('token',token);
+            uname.textContent = u;
+            show('main');
+            listPws();
+        } else lmsg.textContent = d.error||"登录失败";
+    });
+}
+function logout() {
+    token=''; localStorage.removeItem('token'); show('login');
+}
+function authHead(){return token? {'x-auth-token':token} : {}; }
+function genpw() {
+    document.getElementById('savemsg').textContent='';
+    fetch('/generate', {
+        method:'POST',
+        body:JSON.stringify({
+            length:Number(pwlen.value)||16,
+            upper:up.checked,
+            lower:low.checked,
+            digit:dig.checked,
+            special:sp.checked
+        }),
+        headers:{'content-type':'application/json',...authHead()}
+    }).then(r=>r.json()).then(d=>{
+        if(d.ok) pwout.value = d.password;
+        else pwout.value = d.error || "失败";
+    });
+}
+function savepw() {
+    let name = savename.value.trim();
+    let password = pwout.value;
+    savemsg.textContent = '';
+    if (!name || !password) return savemsg.textContent="名称和密码不能为空";
+    if (editName && editName !== name) {
+        savemsg.textContent = "编辑时不能修改名称";
+        return;
+    }
+    let url = '/save';
+    let method = 'POST';
+    let data = {name, password};
+    if (editName) {
+        url = '/edit';
+        data.oldName = editName;
+        method = 'POST';
+    }
+    fetch(url, {
+        method,
+        body:JSON.stringify(data),
+        headers:{'content-type':'application/json',...authHead()}
+    }).then(r=>r.json()).then(d=>{
+        savemsg.textContent = d.ok ? (editName ? "修改成功":"保存成功") : ("失败: "+(d.error||""));
+        if (d.ok) {
+            setTimeout(listPws,400);
+            savename.value = '';
+            pwout.value = '';
+            editName = null;
+            document.getElementById('savename').disabled = false;
+        }
+    });
+}
+function listPws() {
+    pwlist.innerHTML = '';
+    editName = null;
+    document.getElementById('savename').disabled = false;
+    savename.value = '';
+    pwout.value = '';
+    fetch('/list', {headers: authHead()})
+        .then(r=>r.json())
+        .then(d=>{
+            if (d.ok && d.data) {
+                for(let rec of d.data){
+                    let li = document.createElement('li');
+                    li.className = "pwrow";
+                    li.innerHTML = '<b>'+rec.name+'</b> : <span>'+rec.password+'</span> ';
+                    let editbtn = document.createElement('button');
+                    editbtn.textContent = '编辑';
+                    editbtn.onclick = ()=>editpw(rec.name, rec.password);
+                    li.appendChild(editbtn);
+                    let delbtn = document.createElement('button');
+                    delbtn.textContent = '删除';
+                    delbtn.onclick = ()=>delpw(rec.name);
+                    li.appendChild(delbtn);
+                    pwlist.appendChild(li);
+                }
+            }
+        });
+}
+function editpw(name, pw) {
+    savename.value = name;
+    pwout.value = pw;
+    editName = name;
+    document.getElementById('savename').disabled = true;
+    savemsg.textContent = "正在编辑";
+}
+function delpw(name){
+    if (confirm('确定删除 "'+name+'"?'))
+    fetch('/delete?name='+encodeURIComponent(name),{method:'POST', headers: authHead()})
+    .then(r=>r.json()).then(d=>{
+        if(d.ok) listPws();
+        else alert('删除失败:'+d.error);
+    });
+}
+function exportAll() {
+    fetch('/export', {headers:authHead()})
+    .then(r=>r.text()).then(csv=>{
+        // 创建下载链接
+        let blob = new Blob([csv], {type:'text/csv'});
+        let url = URL.createObjectURL(blob);
+        let a = document.createElement('a');
+        a.href = url;
+        a.download = 'passwords.csv';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(()=>{document.body.removeChild(a); URL.revokeObjectURL(url);}, 100);
+    });
+}
+window.onload = function(){
+    token = localStorage.getItem('token')||'';
+    if(token) show('main'), listPws();
+}
+</script>
+</body></html>
+`;
+
+async function getUser(env, user) {
+    if (!user) return null;
+    let raw = await env.USERS.get('user:'+user);
+    return raw ? JSON.parse(raw) : null;
+}
+async function auth(request, env) {
+    let token = request.headers.get('x-auth-token');
+    if (!token) return null;
+    let user = await env.USERS.get('token:'+token);
+    return user;
+}
+async function listUserPasswords(env, user) {
+    let raw = await env.PASSWORDS.get('pwlist:'+user);
+    let arr = [];
+    if (raw) try{arr=JSON.parse(raw);}catch{}
+    return arr;
+}
+async function setUserPassword(env, user, pArr) {
+    await env.PASSWORDS.put('pwlist:'+user, JSON.stringify(pArr));
+}
+export default {
+    async fetch(request, env) {
+        const url = new URL(request.url);
+        if (url.pathname === '/') return new Response(HTML, {headers:{'content-type':'text/html'}});
+        if (url.pathname === '/register' && request.method==='POST') {
+            let {username, password} = await request.json();
+            if (!username||!password) return Response.json({ok:false, error:"缺少用户名或密码"});
+            username = username.trim().toLowerCase();
+            if (!/^[a-z0-9_\-]{3,30}$/.test(username)) return Response.json({ok:false,error:'用户名不合法，只允许字母/数字/下划线/短横线，3-30长度'});
+            if (await env.USERS.get('user:'+username)) return Response.json({ok:false,error:'用户已存在'});
+            const hpwd = await sha256(password);
+            await env.USERS.put('user:'+username, JSON.stringify({username,hpwd}));
+            return Response.json({ok:true});
+        }
+        if (url.pathname==='/login' && request.method==='POST') {
+            let {username, password} = await request.json();
+            if (!username||!password) return Response.json({ok:false, error:"缺少用户名或密码"});
+            username = username.trim().toLowerCase();
+            let userObj = await getUser(env, username);
+            if (!userObj) return Response.json({ok:false,error:'用户不存在'});
+            const hpwd = await sha256(password);
+            if (userObj.hpwd !== hpwd) return Response.json({ok:false,error:'密码错误'});
+            const token = genToken();
+            await env.USERS.put('token:'+token, username, {expirationTtl: 86400*7});
+            return Response.json({ok:true, token});
+        }
+        const username = await auth(request, env);
+        if (!username) return Response.json({ok:false, error:'未登录或Token无效'}, {status:401});
+        if (url.pathname === '/generate' && request.method==='POST') {
+            try {
+                const body = await request.json();
+                const {
+                    length = 16,
+                    upper = true,
+                    lower = true,
+                    digit = true,
+                    special = true
+                } = body;
+                if (!upper && !lower && !digit && !special)
+                    return Response.json({ok: false, error: "No charset selected"});
+                const n = Math.max(4, Math.min(64, Number(length) || 16));
+                const pw = generatePassword(n, {upper, lower, digit, special});
+                return Response.json({ok:true, password:pw});
+            } catch (e) {
+                return Response.json({ok:false, error: "请求有误"});
+            }
+        }
+        if (url.pathname==='/save' && request.method==='POST') {
+            const {name, password} = await request.json();
+            if (!name||!password) return Response.json({ok:false, error: "名称和密码不能为空"});
+            let arr = await listUserPasswords(env, username);
+            if (arr.find(x=>x.name===name)) return Response.json({ok:false,error:'名称已存在'});
+            arr.push({name,password});
+            await setUserPassword(env, username, arr);
+            return Response.json({ok:true});
+        }
+        // 新增：编辑密码（按名称修改，不能改名）
+        if (url.pathname==='/edit' && request.method==='POST') {
+            const {oldName, name, password} = await request.json();
+            if (!oldName || !password) return Response.json({ok:false, error:'缺少参数'});
+            let arr = await listUserPasswords(env, username);
+            let idx = arr.findIndex(x=>x.name===oldName);
+            if (idx<0) return Response.json({ok:false, error:"没有该记录"});
+            arr[idx].password = password;
+            await setUserPassword(env, username, arr);
+            return Response.json({ok:true});
+        }
+        if (url.pathname==='/list' && request.method==='GET') {
+            let arr = await listUserPasswords(env, username);
+            return Response.json({ok:true, data:arr});
+        }
+        if (url.pathname==='/delete' && request.method==='POST') {
+            let name = url.searchParams.get('name');
+            if (!name) return Response.json({ok:false,error:'缺少名称'});
+            let arr = await listUserPasswords(env, username);
+            let nArr = arr.filter(x=>x.name!==name);
+            if (nArr.length===arr.length) return Response.json({ok:false,error:'没有该记录'});
+            await setUserPassword(env, username, nArr);
+            return Response.json({ok:true});
+        }
+        // 新增：导出为CSV
+        if (url.pathname==='/export' && request.method==='GET') {
+            let arr = await listUserPasswords(env, username);
+            let csv = '名称,密码\n'+arr.map(x=>`"${x.name.replace(/"/g,'""')}","${x.password.replace(/"/g,'""')}"`).join('\n');
+            return new Response(csv, {headers:{'content-type':'text/csv; charset=utf-8'}});
+        }
+        return new Response('404 Not Found', {status:404});
+    }
+};
