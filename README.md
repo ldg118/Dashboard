@@ -2,15 +2,21 @@
 请在 Cloudflare dashboard 预设两个 KV 命名空间
 
 一个绑定为 USERS 用于存储用户信息
+
 一个绑定为 PASSWORDS 用于存储每个用户的密码记录集
 
 
 部署提示（必读）
 在 Cloudflare Worker 后台创建两个 KV：
+
 USERS：存储用户信息。
+
 PASSWORDS：存储每个用户的密码列表。
+
 绑定到 Worker 的环境变量分别为 USERS, PASSWORDS。
+
 部署并访问你的 Cloudflare Worker 即可看到注册/登录/密码管理页面。
+
 如需更丰富功能，比如密码加密、编辑等可以再提问。
 
 变化说明
